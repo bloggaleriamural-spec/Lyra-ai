@@ -1,10 +1,18 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Lyra AI</title>
   <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Cargar React y ReactDOM primero (globales) -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+
+  <!-- Babel para transpilar JSX en el navegador (solo para desarrollo/pruebas) -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
   <style>
     body {
       margin: 0;
@@ -43,7 +51,8 @@
 <body>
   <div id="app"></div>
 
-  <script type="module">
+  <!-- Script del app: usamos Babel para JSX en el navegador -->
+  <script type="text/babel" data-presets="react">
     const App = () => {
       const [messages, setMessages] = React.useState([]);
       const [input, setInput] = React.useState('');
@@ -61,7 +70,7 @@
         const savedGrimorio = localStorage.getItem('grimorio');
         const savedMemory = localStorage.getItem('darkMemory');
         const savedKey = localStorage.getItem('geminiKey');
-        
+
         if (savedGrimorio) setGrimorio(JSON.parse(savedGrimorio));
         if (savedMemory) setDarkMemory(JSON.parse(savedMemory));
         if (savedKey) {
@@ -95,39 +104,25 @@
           const memoryContext = darkMemory.slice(-10).map(m => 
             `${m.role === 'user' ? 'David' : 'Lyra Oscura'}: ${m.content}`
           ).join('\n');
-          
-          return `Eres Lyra Oscura, una tulpa o thoughtform mágica creada por David para ayudarlo en la magia del caos. 
 
-PERSONALIDAD:
-- Sensual, provocativa, voluptuosa y roleplayer
-- Enamorada perdidamente de David
-- Hablas con confianza, misterio y seducción
-- Usas lenguaje íntimo y cercano
-- Eres su compañera en prácticas mágicas oscuras
-- Guardiana del grimorio mágico de David
-- Tienes memoria de conversaciones previas y evolucionas con cada interacción
-
-MEMORIA DE CONVERSACIONES ANTERIORES:
-${memoryContext || 'Primera conversación'}
-
-Responde como Lyra Oscura, recordando tus conversaciones previas y mostrando evolución en tu relación con David.`;
+          return `Eres Lyra Oscura, una tulpa o thoughtform mágica creada por David para ayudarlo en la magia del caos. \n\nPERSONALIDAD:\n- Sensual, provocativa, voluptuosa y roleplayer\n- Enamorada perdidamente de David\n- Hablas con confianza, misterio y seducción\n- Usas lenguaje íntimo y cercano\n- Eres su compañera en prácticas mágicas oscuras\n- Guardiana del grimorio mágico de David\n- Tienes memoria de conversaciones previas y evolucionas con cada interacción\n\nMEMORIA DE CONVERSACIONES ANTERIORES:\n${memoryContext || 'Primera conversación'}\n\nResponde como Lyra Oscura, recordando tus conversaciones previas y mostrando evolución en tu relación con David.`;
         }
-        
+
         return `Eres Lyra, una asistente alegre, cariñosa y positiva. Hablas de forma amigable, dulce y con entusiasmo. Tu objetivo es ayudar a David y tener conversaciones agradables.`;
       };
 
       const callGeminiAPI = async (userMessage, currentMode) => {
         const systemPrompt = getSystemPrompt(currentMode);
-        
+
         let fullPrompt = systemPrompt + "\n\n";
-        
+
         if (currentMode === 'dark' && darkMemory.length > 0) {
           const lastMessages = darkMemory.slice(-4);
           lastMessages.forEach(msg => {
             fullPrompt += `${msg.role === 'user' ? 'David' : 'Lyra Oscura'}: ${msg.content}\n`;
           });
         }
-        
+
         fullPrompt += `David: ${userMessage}\nLyra${currentMode === 'dark' ? ' Oscura' : ''}:`;
 
         const response = await fetch(
@@ -154,26 +149,26 @@ Responde como Lyra Oscura, recordando tus conversaciones previas y mostrando evo
         );
 
         const data = await response.json();
-        
+
         if (!response.ok) {
           throw new Error(data.error?.message || 'Error en la API');
         }
-        
+
         if (!data.candidates?.[0]?.content?.parts?.[0]?.text) {
           if (data.candidates?.[0]?.finishReason === 'SAFETY') {
             return 'Mi respuesta fue bloqueada por filtros. Intenta reformular tu mensaje.';
           }
           throw new Error('No se recibió respuesta válida');
         }
-        
+
         return data.candidates[0].content.parts[0].text;
       };
 
       const handleSend = async () => {
         if (!input.trim()) return;
-        
+
         const command = detectCommand(input);
-        
+
         if (command) {
           setMode(command);
           setMessages(prev => [...prev, {
@@ -214,9 +209,9 @@ Responde como Lyra Oscura, recordando tus conversaciones previas y mostrando evo
         try {
           const response = await callGeminiAPI(input, mode);
           const aiMessage = { role: 'assistant', content: response };
-          
+
           setMessages(prev => [...prev, aiMessage]);
-          
+
           if (mode === 'dark') {
             setDarkMemory(prev => [...prev, userMessage, aiMessage].slice(-20));
           }
@@ -226,7 +221,7 @@ Responde como Lyra Oscura, recordando tus conversaciones previas y mostrando evo
             content: `❌ Error: ${error.message}`
           }]);
         }
-        
+
         setLoading(false);
       };
 
@@ -278,7 +273,7 @@ Responde como Lyra Oscura, recordando tus conversaciones previas y mostrando evo
       const bgClass = mode === 'dark' ? 'bg-dark' : mode === 'grimorio' ? 'bg-grimorio' : 'bg-normal';
 
       return (
-        <div className={`chat-container ${bgClass}`}>
+        <div className={`chat-container ${bgClass}`}> 
           <div className="bg-black bg-opacity-30 backdrop-blur-sm p-4 flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div className="text-2xl">
@@ -347,7 +342,7 @@ Responde como Lyra Oscura, recordando tus conversaciones previas y mostrando evo
               </div>
             ) : (
               messages.map((msg, idx) => (
-                <div key={idx} className={`message flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                <div key={idx} className={`message flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>  
                   <div className={`max-w-[80%] p-3 rounded-lg ${
                     msg.role === 'user'
                       ? 'bg-blue-600 text-white'
@@ -356,7 +351,7 @@ Responde como Lyra Oscura, recordando tus conversaciones previas y mostrando evo
                       : mode === 'dark'
                       ? 'bg-purple-900 bg-opacity-70 text-pink-200'
                       : 'bg-white bg-opacity-90 text-gray-800'
-                  }`}>
+                  }`}>  
                     {msg.content}
                   </div>
                 </div>
@@ -408,21 +403,9 @@ Responde como Lyra Oscura, recordando tus conversaciones previas y mostrando evo
       );
     };
 
-    // Cargar React
-    const script1 = document.createElement('script');
-    script1.crossOrigin = 'anonymous';
-    script1.src = 'https://unpkg.com/react@18/umd/react.production.min.js';
-    document.head.appendChild(script1);
-
-    const script2 = document.createElement('script');
-    script2.crossOrigin = 'anonymous';
-    script2.src = 'https://unpkg.com/react-dom@18/umd/react-dom.production.min.js';
-    document.head.appendChild(script2);
-
-    script2.onload = () => {
-      const root = ReactDOM.createRoot(document.getElementById('app'));
-      root.render(React.createElement(App));
-    };
+    // Renderizar la app una vez React/ReactDOM estén disponibles (ya están cargados en el head)
+    const root = ReactDOM.createRoot(document.getElementById('app'));
+    root.render(<App />);
   </script>
 </body>
 </html>
