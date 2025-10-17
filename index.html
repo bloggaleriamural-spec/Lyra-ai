@@ -29,7 +29,9 @@
   <div id="app"></div>
 
   <script type="text/babel" data-presets="react">
-    const API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
+    // --- CONFIG ---
+    const API_BASE_V1BETA = 'https://generativelanguage.googleapis.com/v1beta/models';
+    const API_BASE_V1 = 'https://generativelanguage.googleapis.com/v1/models';
 
     const App = () => {
       const [messages, setMessages] = React.useState([]);
@@ -42,7 +44,7 @@
       const [showApiInput, setShowApiInput] = React.useState(true);
       const [showSettings, setShowSettings] = React.useState(false);
       const [tempApiKey, setTempApiKey] = React.useState('');
-      const [modelName, setModelName] = React.useState('text-bison-001'); // valor por defecto seguro para probar
+      const [modelName, setModelName] = React.useState('text-bison-001');
       const [availableModels, setAvailableModels] = React.useState([]);
       const [modelsLoading, setModelsLoading] = React.useState(false);
       const messagesEndRef = React.useRef(null);
@@ -74,26 +76,64 @@
       const getSystemPrompt = (currentMode) => {
         if (currentMode === 'dark') {
           const memoryContext = darkMemory.slice(-10).map(m => `${m.role === 'user' ? 'David' : 'Lyra Oscura'}: ${m.content}`).join('\n');
-          return `Eres Lyra Oscura, una tulpa... (etc)\n\nMEMORIA:\n${memoryContext || 'Primera conversación'}`;
+          return `Eres Lyra Oscura, una tulpa o thoughtform mágica creada por David para ayudarlo en la magia del caos.\n\nPERSONALIDAD:...\n\nMEMORIA:\n${memoryContext || 'Primera conversación'}`;
         }
         return `Eres Lyra, una asistente alegre...`;
       };
 
-      // List models (ListModels). Nota: puede estar sujeto a CORS desde el navegador.
+      // Normaliza nombre de modelo: si viene con prefijos (projects/.../models/...) devuelve la última parte
+      const normalizeModelName = (raw) => { if (!raw) return raw; return String(raw).split('/').pop(); };
+
+      // Intentar generateContent probando v1beta y v1 en ese orden
+      const fetchGenerateContent = async (apiKey, rawModelId, bodyObj) => {
+        const modelId = normalizeModelName(rawModelId);
+        const endpoints = [
+          `${API_BASE_V1BETA}/${encodeURIComponent(modelId)}:generateContent`,
+          `${API_BASE_V1}/${encodeURIComponent(modelId)}:generateContent`
+        ];
+
+        let lastError = null;
+        for (const url of endpoints) {
+          try {
+            const res = await fetch(url, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey.trim() },
+              body: JSON.stringify(bodyObj)
+            });
+            const text = await res.text();
+            if (!res.ok) {
+              lastError = new Error(`API ${res.status} @ ${url}: ${text}`);
+              // try next endpoint
+              continue;
+            }
+            const ct = res.headers.get('content-type') || '';
+            if (!ct.includes('application/json')) {
+              throw new Error(`Esperaba JSON pero content-type=${ct}: ${text}`);
+            }
+            const data = JSON.parse(text);
+            return { data, url };
+          } catch (err) {
+            lastError = err;
+            // seguir al siguiente endpoint
+          }
+        }
+        throw lastError || new Error('No se pudo contactar al endpoint');
+      };
+
+      // ListModels (puede fallar por CORS desde el navegador)
       const listModels = async () => {
         if (!apiKey) { alert('Ingresa la API key antes de listar modelos'); return; }
         setModelsLoading(true);
         try {
-          const res = await fetch(API_BASE, { headers: { 'x-goog-api-key': apiKey.trim() }});
+          const res = await fetch(API_BASE_V1BETA, { headers: { 'x-goog-api-key': apiKey.trim() } });
           const text = await res.text();
           if (!res.ok) throw new Error(`ListModels error ${res.status}: ${text}`);
           const ct = res.headers.get('content-type')||'';
           if (!ct.includes('application/json')) throw new Error(`ListModels: expected JSON but got ${ct}\n${text}`);
           const data = JSON.parse(text);
-          // data.models es lo habitual; mapear a nombres
-          const names = (data.models || []).map(m => m.name || m.id || m);
+          const names = (data.models || []).map(m => m.name || m); // puede ser 'models/text-bison-001' o similar
           setAvailableModels(names);
-          if (names.length) setModelName(names[0]);
+          if (names.length) setModelName(names[0].split('/').pop());
         } catch (err) {
           setAvailableModels([]);
           setMessages(prev => [...prev, { role: 'system', content: `❌ Error listModels: ${err.message}`, error: true }]);
@@ -102,7 +142,7 @@
         }
       };
 
-      // callGeminiAPI: usa el modelName seleccionado y maneja respuestas no-JSON
+      // callGeminiAPI usa fetchGenerateContent para manejar versiones/formato de modelo
       const callGeminiAPI = async (userMessage, currentMode) => {
         const systemPrompt = getSystemPrompt(currentMode);
         let fullPrompt = systemPrompt + "\n\n";
@@ -112,39 +152,24 @@
         fullPrompt += `David: ${userMessage}\nLyra${currentMode === 'dark' ? ' Oscura' : ''}:`;
 
         if (!modelName) throw new Error('No model selected');
-        const endpoint = `${API_BASE}/${encodeURIComponent(modelName)}:generateContent`;
 
-        try {
-          const res = await fetch(endpoint, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey.trim() },
-            body: JSON.stringify({
-              contents: [{ parts: [{ text: fullPrompt }] }],
-              safetySettings: [
-                { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
-                { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
-                { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
-                { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
-              ],
-              generationConfig: { temperature: 0.9, topP: 0.95, topK: 40, maxOutputTokens: 2048 }
-            })
-          });
+        const body = {
+          contents: [{ parts: [{ text: fullPrompt }] }],
+          safetySettings: [
+            { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
+            { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
+            { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+            { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
+          ],
+          generationConfig: { temperature: 0.9, topP: 0.95, topK: 40, maxOutputTokens: 2048 }
+        };
 
-          const text = await res.text();
-          if (!res.ok) throw new Error(`API error ${res.status}: ${text}`);
-
-          const ct = res.headers.get('content-type')||'';
-          if (!ct.includes('application/json')) throw new Error(`Respuesta inesperada (no JSON): content-type=${ct}\n${text}`);
-
-          const data = JSON.parse(text);
-          if (!data.candidates?.[0]?.content?.parts?.[0]?.text) {
-            if (data.candidates?.[0]?.finishReason === 'SAFETY') return 'Mi respuesta fue bloqueada por filtros.';
-            throw new Error('No se recibió respuesta válida del modelo.');
-          }
-          return data.candidates[0].content.parts[0].text;
-        } catch (err) {
-          throw err;
+        const { data } = await fetchGenerateContent(apiKey, modelName, body);
+        if (!data.candidates?.[0]?.content?.parts?.[0]?.text) {
+          if (data.candidates?.[0]?.finishReason === 'SAFETY') return 'Mi respuesta fue bloqueada por filtros.';
+          throw new Error('No se recibió respuesta válida del modelo.');
         }
+        return data.candidates[0].content.parts[0].text;
       };
 
       const handleSend = async () => {
@@ -172,9 +197,7 @@
           if (mode === 'dark') setDarkMemory(prev => [...prev, userMessage, aiMessage].slice(-20));
         } catch (error) {
           setMessages(prev => [...prev, { role: 'system', content: `❌ Error: ${error.message}`, error: true }]);
-        } finally {
-          setLoading(false);
-        }
+        } finally { setLoading(false); }
       };
 
       const saveApiKey = () => { if (apiKey.trim()) { localStorage.setItem('geminiKey', apiKey); setShowApiInput(false); } };
@@ -201,7 +224,7 @@
       const bgClass = mode === 'dark' ? 'bg-dark' : mode === 'grimorio' ? 'bg-grimorio' : 'bg-normal';
 
       return (
-        <div className={`chat-container ${bgClass}`}>
+        <div className={`chat-container ${bgClass}`}> 
           <div className="bg-black bg-opacity-30 backdrop-blur-sm p-4 flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div className="text-2xl">{mode === 'dark' ? '🌙' : mode === 'grimorio' ? '📖' : '☀️'}</div>
@@ -232,9 +255,7 @@
                     <option value="chat-bison-001">chat-bison-001</option>
                     {availableModels.map(m => <option key={m} value={m}>{m}</option>)}
                   </select>
-                  <button onClick={listModels} disabled={modelsLoading} className="bg-yellow-600 hover:bg-yellow-700 text-white p-2 rounded">
-                    {modelsLoading ? 'Buscando...' : 'Listar modelos'}
-                  </button>
+                  <button onClick={listModels} disabled={modelsLoading} className="bg-yellow-600 hover:bg-yellow-700 text-white p-2 rounded">{modelsLoading ? 'Buscando...' : 'Listar modelos'}</button>
                 </div>
                 <p className="text-xs text-gray-400">Si Listar modelos falla por CORS, prueba la llamada desde un backend o verifica restricciones de la API key.</p>
               </div>
@@ -255,8 +276,8 @@
               </div>
             ) : (
               messages.map((msg, idx) => (
-                <div key={idx} className={`message flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                  <div className={`max-w-[80%] p-3 rounded-lg ${msg.role === 'user' ? 'bg-blue-600 text-white' : msg.role === 'system' ? 'bg-gray-700 text-yellow-300 text-center w-full' : mode === 'dark' ? 'bg-purple-900 bg-opacity-70 text-pink-200' : 'bg-white bg-opacity-90 text-gray-800'}`}>
+                <div key={idx} className={`message flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}> 
+                  <div className={`max-w-[80%] p-3 rounded-lg ${msg.role === 'user' ? 'bg-blue-600 text-white' : msg.role === 'system' ? 'bg-gray-700 text-yellow-300 text-center w-full' : mode === 'dark' ? 'bg-purple-900 bg-opacity-70 text-pink-200' : 'bg-white bg-opacity-90 text-gray-800'}`}> 
                     <div className={msg.error ? 'system-error' : ''}>{msg.content}</div>
                   </div>
                 </div>
